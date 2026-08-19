@@ -1,0 +1,109 @@
+# Track 05 - Network and Cloud Infrastructure
+# .gitignore for git version control
+
+# Environment and configuration files
+.env
+.env.local
+*.env.example
+
+# Ansible
+*.retry
+.ansible/cache/
+*.pyc
+
+# Kubernetes
+kubeconfig
+.kubeconfig
+kubeconfig-*
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+.tmp/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# IDE and editor
+.vscode/
+.idea/
+*.sublime-*
+*.code-workspace
+
+# Shell script temporaries
+*.sh~
+*.bash~
+
+# Cluster/runtime artifacts
+.k3d/
+k3d-*
+.kube/
+
+# Grafana exports and exports
+*dashboard*.backup
+*dashboard*.export
+
+# Docker
+.dockerignore
+docker-compose.override.yml
+
+# OpenTofu / Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.lock.hcl
+
+# Test outputs
+test-results/
+*.test-output
+
+# Backup files
+*.backup
+*.bak
+*~
+*.orig
+
+# OS-specific
+Thumbs.db
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Credentials and secrets (IMPORTANT)
+**/secrets.yaml
+**/secrets.yml
+**/*secret*.env
+**/*password*.txt
+kubeconfig
+.aws/
+.gcp/
+.azure/
+
+# Large files (use git lfs for these if needed)
+*.tar.gz
+*.zip
+*.iso
+
+# Specific to challenge track
+ansible/roles/**/*.swp
+grafana/dashboards/**.backup
+network-policies/*.test
+verification/*.output
+
+# Documentation build artifacts
+docs/_build/
+docs/.doctrees/
+
+# Never track actual k3d clusters or running configs
+.k3d-cluster/
+cluster-config/

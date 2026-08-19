@@ -1,0 +1,77 @@
+# Week 12: Test NetworkPolicy - Allow Rule
+#
+# This NetworkPolicy demonstrates allowing specific traffic to PostgreSQL.
+# Use this after blocking to show that Flask-to-PostgreSQL can be explicitly allowed.
+#
+# To apply: kubectl apply -f test-allow-policy.yaml
+# To verify allowing: Check Grafana success rate dashboard for recovery to normal
+# To remove: kubectl delete networkpolicy flask-to-postgres-allow -n <namespace>
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: flask-to-postgres-allow
+  namespace: default  # UPDATE: change to your PostgreSQL namespace
+  labels:
+    app: test-policy
+    purpose: demonstrate-allowing
+spec:
+  # This policy applies to PostgreSQL pods
+  podSelector:
+    matchLabels:
+      app: postgres  # UPDATE: match your PostgreSQL pod labels
+
+  # Define the policy types this applies to
+  policyTypes:
+    - Ingress
+
+  # Allow ingress only from Flask pods on the PostgreSQL port
+  ingress:
+    # Allow traffic from Flask
+    - from:
+        - podSelector:
+            matchLabels:
+              app: flask  # UPDATE: match your Flask pod labels
+      ports:
+        - protocol: TCP
+          port: 5432  # PostgreSQL port - UPDATE if different
+
+    # Optional: Allow traffic from any pod in the same namespace
+    # Uncomment below if you want to allow local namespace traffic as well
+    # - from:
+    #     - namespaceSelector:
+    #         matchLabels:
+    #           name: default
+    #   ports:
+    #     - protocol: TCP
+    #       port: 5432
+
+---
+
+# Alternative: More Granular Allow
+# This version allows Flask-to-PostgreSQL with specific namespace and port
+
+# apiVersion: networking.k8s.io/v1
+# kind: NetworkPolicy
+# metadata:
+#   name: flask-to-postgres-allow-granular
+#   namespace: default
+# spec:
+#   podSelector:
+#     matchLabels:
+#       app: postgres
+#   policyTypes:
+#     - Ingress
+#   ingress:
+#     - from:
+#         - namespaceSelector:
+#             matchLabels:
+#               name: default  # Flask namespace - UPDATE if in different namespace
+#           podSelector:
+#             matchLabels:
+#               app: flask
+#       ports:
+#         - protocol: TCP
+#           port: 5432
+#         - protocol: TCP
+#           port: 3306  # Add if also using MySQL or other ports

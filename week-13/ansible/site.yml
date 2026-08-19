@@ -1,0 +1,87 @@
+---
+# Ansible playbook for INET 4031 Challenge Track 5: Network and Cloud Infrastructure
+# This playbook extends the Weeks 1-4 baseline with the Track 5 Linkerd role.
+#
+# Weeks 1-4 baseline infrastructure (from Solved Repositories/week-04/ansible/site.yml):
+# Week 1: Baseline environment setup (inline tasks)
+# Week 2: Deploy application stack (app-stack role)
+# Week 3: Set up k3d cluster (k3d-setup role)
+# Week 4: Install and initialize OpenTofu (opentofu-setup role)
+# Track 5: Add Linkerd service mesh (linkerd role)
+#
+# By Week 14, this playbook should rebuild the entire environment from scratch.
+#
+# Usage:
+#   Dry-run (check mode):
+#     ansible-playbook -i inventory ansible/site.yml --check
+#
+#   Full deployment:
+#     ansible-playbook -i inventory ansible/site.yml
+#
+# Idempotency:
+# All roles are designed to be idempotent, meaning running the playbook multiple times
+# should produce the same result. This is essential for the Week 14 Demo Day rebuild.
+
+- name: Baseline environment setup
+  hosts: localhost
+  connection: local
+  become: yes
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Ensure baseline packages are installed
+      apt:
+        name:
+          - curl
+          - git
+          - vim
+          - python3
+          - python3-pip
+        state: present
+
+    - name: Ensure Docker is installed
+      apt:
+        name: docker.io
+        state: present
+
+- name: Deploy application stack
+  hosts: localhost
+  connection: local
+  become: yes
+
+  roles:
+    - app-stack
+
+- name: Set up k3d cluster
+  hosts: localhost
+  connection: local
+  become: yes
+
+  roles:
+    - k3d-setup
+
+- name: Install and initialize OpenTofu
+  hosts: localhost
+  connection: local
+  become: yes
+
+  roles:
+    - opentofu-setup
+
+- name: Install and configure Linkerd service mesh (Challenge Track 5)
+  hosts: localhost
+  connection: local
+  become: yes
+
+  vars:
+    # Challenge Track 5: Linkerd and Service Mesh Configuration
+    linkerd_namespace: linkerd
+    flask_namespace: default      # UPDATE: Change to your Flask namespace if different
+    postgres_namespace: default   # UPDATE: Change to your PostgreSQL namespace if different
+
+  roles:
+    - linkerd

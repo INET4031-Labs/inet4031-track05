@@ -1,0 +1,62 @@
+# Week 12: Test NetworkPolicy - Blocking Rule
+#
+# This NetworkPolicy demonstrates blocking traffic from Flask to PostgreSQL.
+# Use this to test that meshed traffic respects network policies.
+#
+# To apply: kubectl apply -f test-blocking-policy.yaml
+# To verify blocking: Check Grafana success rate dashboard for drops to 0%
+# To remove: kubectl delete networkpolicy flask-to-postgres-block -n <namespace>
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: flask-to-postgres-block
+  namespace: default  # UPDATE: change to your PostgreSQL namespace
+  labels:
+    app: test-policy
+    purpose: demonstrate-blocking
+spec:
+  # This policy applies to PostgreSQL pods
+  podSelector:
+    matchLabels:
+      app: postgres  # UPDATE: match your PostgreSQL pod labels
+      # If multiple pods need blocking, add more label selectors here
+
+  # Define the policy types this applies to
+  policyTypes:
+    - Ingress
+
+  # Empty ingress list = deny all ingress traffic
+  # This blocks all inbound connections to PostgreSQL, including from Flask
+  ingress: []
+
+  # Note: egress is not restricted, so PostgreSQL can still make outbound connections
+  # To also block egress, add policyTypes: [Ingress, Egress] and define egress rules
+
+---
+
+# Alternative: Selective Blocking
+# This version blocks only Flask-to-PostgreSQL, leaving other clients unaffected
+# Uncomment below and comment out the simple blocking policy above to use this instead
+
+# apiVersion: networking.k8s.io/v1
+# kind: NetworkPolicy
+# metadata:
+#   name: flask-to-postgres-block-selective
+#   namespace: default
+# spec:
+#   podSelector:
+#     matchLabels:
+#       app: postgres
+#   policyTypes:
+#     - Ingress
+#   ingress:
+#     # Allow all except Flask
+#     - from:
+#         - podSelector:
+#             matchLabels:
+#               app: flask
+#             namespaceSelector: {}
+#       ports:
+#         - protocol: TCP
+#           port: 5432  # PostgreSQL port - UPDATE if different

@@ -1,0 +1,277 @@
+---
+# tasks/main.yml - Linkerd Service Mesh Installation
+# Installs Linkerd CLI and deploys the control plane to k3d cluster
+#
+# This role:
+# 1. Installs Linkerd CLI on the control host
+# 2. Runs pre-installation checks
+# 3. Deploys Linkerd control plane to the cluster
+# 4. Verifies installation with linkerd check
+
+- name: Install Linkerd CLI
+  block:
+    - name: Check if Linkerd CLI is already installed
+      command: linkerd version
+      register: linkerd_version_check
+      failed_when: false
+      changed_when: false
+
+    - name: Download Linkerd CLI binary
+      shell: |
+        curl --proto '=https' --tlsv1.2 -sSfL https://run.linkerd.io/install | sh
+      environment:
+        PATH: "{{ ansible_env.PATH }}:/usr/local/bin"
+      when: linkerd_version_check.rc != 0
+      register: linkerd_install
+      changed_when: '"installed" in linkerd_install.stderr or linkerd_install.rc == 0'
+
+    - name: Add Linkerd to PATH (for current session)
+      shell: export PATH=$PATH:$HOME/.linkerd2/bin
+      when: linkerd_install is changed
+
+    - name: Verify Linkerd CLI installation
+      command: /root/.linkerd2/bin/linkerd version
+      environment:
+        PATH: "{{ ansible_env.PATH }}:/root/.linkerd2/bin"
+      register: linkerd_cli_version
+      changed_when: false
+
+    - name: Display Linkerd CLI version
+      debug:
+        msg: "Linkerd CLI version: {{ linkerd_cli_version.stdout }}"
+
+  tags: [linkerd, install, cli]
+
+- name: Run Pre-Installation Checks
+  block:
+    - name: Check Linkerd pre-requisites
+      command: /root/.linkerd2/bin/linkerd check --pre
+      environment:
+        PATH: "{{ ansible_env.PATH }}:/root/.linkerd2/bin"
+        KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+      register: linkerd_precheck
+      changed_when: false
+      # Note: This may fail if cluster is not reachable; continue anyway for dry-run
+
+    - name: Display pre-installation check results
+      debug:
+        msg: "{{ linkerd_precheck.stdout }}"
+      when: linkerd_precheck.rc == 0
+
+    - name: Warn if pre-checks did not pass
+      debug:
+        msg: "WARNING: Pre-installation checks did not complete. Verify cluster connectivity and try again."
+      when: linkerd_precheck.rc != 0
+
+  tags: [linkerd, check, pre-flight]
+
+- name: Deploy Linkerd Control Plane
+  block:
+    - name: Install Linkerd control plane via CLI
+      command: |
+        /root/.linkerd2/bin/linkerd install --crds | kubectl apply -f -
+      environment:
+        PATH: "{{ ansible_env.PATH }}:/root/.linkerd2/bin"
+        KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+      register: linkerd_crds_install
+      changed_when: "('created' in linkerd_crds_install.stderr or 'configured' in linkerd_crds_install.stderr) or linkerd_crds_install.rc == 0"
+      tags: [linkerd, deploy, crds]
+
+    - name: Wait for CRDs to be available
+      command: kubectl get crds -o name | grep linkerd
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+      register: crds_available
+      until: crds_available.rc == 0
+      retries: 10
+      delay: 5
+      changed_when: false
+      tags: [linkerd, deploy, crds, wait]
+
+    - name: Deploy Linkerd control plane
+      command: |
+        /root/.linkerd2/bin/linkerd install | kubectl apply -f -
+      environment:
+        PATH: "{{ ansible_env.PATH }}:/root/.linkerd2/bin"
+        KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+      register: linkerd_install_result
+      changed_when: "('created' in linkerd_install_result.stderr or 'configured' in linkerd_install_result.stderr) or linkerd_install_result.rc == 0"
+      tags: [linkerd, deploy, controlplane]
+
+    - name: Display control plane deployment result
+      debug:
+        msg: "{{ linkerd_install_result.stderr }}"
+      tags: [linkerd, deploy, controlplane]
+
+  tags: [linkerd, deploy]
+
+- name: Verify Linkerd Installation
+  block:
+    - name: Wait for Linkerd namespace to be ready
+      command: |
+        kubectl get namespace linkerd
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+      register: linkerd_ns_check
+      until: linkerd_ns_check.rc == 0
+      retries: 10
+      delay: 3
+      changed_when: false
+      tags: [linkerd, verify, namespace]
+
+    - name: Wait for Linkerd control plane pods to be ready
+      shell: |
+        kubectl wait --for=condition=Ready pod \
+          -l app.kubernetes.io/part-of=Linkerd \
+          -n linkerd --timeout=300s 2>/dev/null || true
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+      changed_when: false
+      tags: [linkerd, verify, pods]
+
+    - name: Check Linkerd installation status
+      command: /root/.linkerd2/bin/linkerd check
+      environment:
+        PATH: "{{ ansible_env.PATH }}:/root/.linkerd2/bin"
+        KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+      register: linkerd_check
+      changed_when: false
+      # Note: Check may return non-zero if all validations not complete; this is normal during setup
+      tags: [linkerd, verify, check]
+
+    - name: Display Linkerd check output (last 5 lines)
+      shell: echo "{{ linkerd_check.stdout }}" | tail -5
+      changed_when: false
+      tags: [linkerd, verify, check]
+
+  tags: [linkerd, verify]
+
+- name: Annotate Namespaces for Sidecar Injection
+  block:
+    - name: Get Flask namespace (update with actual namespace if different)
+      set_fact:
+        flask_ns: "{{ flask_namespace | default('default') }}"
+
+    - name: Get PostgreSQL namespace (update with actual namespace if different)
+      set_fact:
+        postgres_ns: "{{ postgres_namespace | default('default') }}"
+
+    - name: Annotate Flask namespace for sidecar injection
+      command: |
+        kubectl annotate namespace {{ flask_ns }} linkerd.io/inject=enabled --overwrite
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+      register: flask_annotate
+      changed_when: "('annotated' in flask_annotate.stdout or 'overwritten' in flask_annotate.stdout) or flask_annotate.rc == 0"
+      tags: [linkerd, inject, flask]
+
+    - name: Annotate PostgreSQL namespace for sidecar injection
+      command: |
+        kubectl annotate namespace {{ postgres_ns }} linkerd.io/inject=enabled --overwrite
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+      register: postgres_annotate
+      changed_when: "('annotated' in postgres_annotate.stdout or 'overwritten' in postgres_annotate.stdout) or postgres_annotate.rc == 0"
+      tags: [linkerd, inject, postgres]
+
+    - name: Restart Flask pods to trigger sidecar injection
+      shell: |
+        kubectl rollout restart deployment -n {{ flask_ns }} --all || \
+        kubectl rollout restart statefulset -n {{ flask_ns }} --all || true
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+      changed_when: false
+      register: flask_restart
+      tags: [linkerd, inject, flask, restart]
+
+    - name: Restart PostgreSQL pods to trigger sidecar injection
+      shell: |
+        kubectl rollout restart statefulset -n {{ postgres_ns }} --all || \
+        kubectl rollout restart deployment -n {{ postgres_ns }} --all || true
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+      changed_when: false
+      register: postgres_restart
+      tags: [linkerd, inject, postgres, restart]
+
+    - name: Wait for Flask pods to be ready
+      shell: |
+        kubectl rollout status deployment -n {{ flask_ns }} --timeout=300s 2>/dev/null || \
+        kubectl rollout status statefulset -n {{ flask_ns }} --timeout=300s 2>/dev/null || true
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+      changed_when: false
+      tags: [linkerd, inject, flask, wait]
+
+    - name: Wait for PostgreSQL pods to be ready
+      shell: |
+        kubectl rollout status statefulset -n {{ postgres_ns }} --timeout=300s 2>/dev/null || \
+        kubectl rollout status deployment -n {{ postgres_ns }} --timeout=300s 2>/dev/null || true
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+      changed_when: false
+      tags: [linkerd, inject, postgres, wait]
+
+  tags: [linkerd, inject]
+
+- name: Verify Service Meshing
+  block:
+    - name: Verify Flask sidecar injection
+      shell: |
+        kubectl get pods -n {{ flask_ns }} -o jsonpath='{.items[*].spec.containers[*].name}' | grep -q linkerd-proxy && echo "Flask sidecars injected"
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+      register: flask_sidecar_check
+      changed_when: false
+      tags: [linkerd, verify, flask]
+
+    - name: Verify PostgreSQL sidecar injection
+      shell: |
+        kubectl get pods -n {{ postgres_ns }} -o jsonpath='{.items[*].spec.containers[*].name}' | grep -q linkerd-proxy && echo "PostgreSQL sidecars injected"
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+      register: postgres_sidecar_check
+      changed_when: false
+      tags: [linkerd, verify, postgres]
+
+    - name: Display sidecar verification results
+      debug:
+        msg:
+          - "Flask sidecar verification: {{ flask_sidecar_check.stdout if flask_sidecar_check.rc == 0 else 'FAILED' }}"
+          - "PostgreSQL sidecar verification: {{ postgres_sidecar_check.stdout if postgres_sidecar_check.rc == 0 else 'FAILED' }}"
+      tags: [linkerd, verify, flask, postgres]
+
+  tags: [linkerd, verify]
+
+- name: Display Final Status
+  block:
+    - name: Show Linkerd namespace status
+      command: kubectl get pods -n linkerd
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+      register: linkerd_pods
+      changed_when: false
+      tags: [linkerd, status]
+
+    - name: Display Linkerd control plane pods
+      debug:
+        msg: "{{ linkerd_pods.stdout }}"
+      tags: [linkerd, status]
+
+    - name: Show final linkerd check output
+      shell: /root/.linkerd2/bin/linkerd check 2>/dev/null | tail -3
+      environment:
+        PATH: "{{ ansible_env.PATH }}:/root/.linkerd2/bin"
+        KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+      register: linkerd_final_check
+      changed_when: false
+      tags: [linkerd, status]
+
+    - name: Display final linkerd check
+      debug:
+        msg: "{{ linkerd_final_check.stdout }}"
+      tags: [linkerd, status]
+
+  tags: [linkerd, status]
+
+# End of linkerd role
