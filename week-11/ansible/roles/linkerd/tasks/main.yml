@@ -42,13 +42,34 @@
 
   tags: [linkerd, install, cli]
 
+- name: Resolve KUBECONFIG Default Path
+  block:
+    # k3d writes its kubeconfig to the invoking (non-root) user's $HOME/.kube/config,
+    # not /root/.kube/config, even though this role runs with become: yes. Resolve the
+    # real invoking user the same way the baseline check scripts do
+    # (REAL_USER=${SUDO_USER:-$USER}, REAL_HOME via getent) rather than assuming root's home.
+    - name: Determine invoking (non-root) user's home directory
+      shell: |
+        REAL_USER="${SUDO_USER:-$USER}"
+        getent passwd "$REAL_USER" | cut -d: -f6
+      register: real_user_home
+      changed_when: false
+      tags: [linkerd, kubeconfig]
+
+    - name: Set default KUBECONFIG path from the invoking user's home
+      set_fact:
+        default_kubeconfig_path: "{{ real_user_home.stdout }}/.kube/config"
+      tags: [linkerd, kubeconfig]
+
+  tags: [linkerd, kubeconfig]
+
 - name: Run Pre-Installation Checks
   block:
     - name: Check Linkerd pre-requisites
       command: /root/.linkerd2/bin/linkerd check --pre
       environment:
         PATH: "{{ ansible_env.PATH }}:/root/.linkerd2/bin"
-        KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+        KUBECONFIG: "{{ kubeconfig_path | default(default_kubeconfig_path) }}"
       register: linkerd_precheck
       changed_when: false
       # Note: This may fail if cluster is not reachable; continue anyway for dry-run
@@ -72,7 +93,7 @@
         /root/.linkerd2/bin/linkerd install --crds | kubectl apply -f -
       environment:
         PATH: "{{ ansible_env.PATH }}:/root/.linkerd2/bin"
-        KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+        KUBECONFIG: "{{ kubeconfig_path | default(default_kubeconfig_path) }}"
       register: linkerd_crds_install
       changed_when: "('created' in linkerd_crds_install.stderr or 'configured' in linkerd_crds_install.stderr) or linkerd_crds_install.rc == 0"
       tags: [linkerd, deploy, crds]
@@ -80,7 +101,7 @@
     - name: Wait for CRDs to be available
       command: kubectl get crds -o name | grep linkerd
       environment:
-        KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+        KUBECONFIG: "{{ kubeconfig_path | default(default_kubeconfig_path) }}"
       register: crds_available
       until: crds_available.rc == 0
       retries: 10
@@ -93,7 +114,7 @@
         /root/.linkerd2/bin/linkerd install | kubectl apply -f -
       environment:
         PATH: "{{ ansible_env.PATH }}:/root/.linkerd2/bin"
-        KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+        KUBECONFIG: "{{ kubeconfig_path | default(default_kubeconfig_path) }}"
       register: linkerd_install_result
       changed_when: "('created' in linkerd_install_result.stderr or 'configured' in linkerd_install_result.stderr) or linkerd_install_result.rc == 0"
       tags: [linkerd, deploy, controlplane]
@@ -111,7 +132,7 @@
       command: |
         kubectl get namespace linkerd
       environment:
-        KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+        KUBECONFIG: "{{ kubeconfig_path | default(default_kubeconfig_path) }}"
       register: linkerd_ns_check
       until: linkerd_ns_check.rc == 0
       retries: 10
@@ -125,7 +146,7 @@
           -l app.kubernetes.io/part-of=Linkerd \
           -n linkerd --timeout=300s 2>/dev/null || true
       environment:
-        KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+        KUBECONFIG: "{{ kubeconfig_path | default(default_kubeconfig_path) }}"
       changed_when: false
       tags: [linkerd, verify, pods]
 
@@ -133,7 +154,7 @@
       command: /root/.linkerd2/bin/linkerd check
       environment:
         PATH: "{{ ansible_env.PATH }}:/root/.linkerd2/bin"
-        KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+        KUBECONFIG: "{{ kubeconfig_path | default(default_kubeconfig_path) }}"
       register: linkerd_check
       changed_when: false
       # Note: Check may return non-zero if all validations not complete; this is normal during setup
@@ -160,7 +181,7 @@
       command: |
         kubectl annotate namespace {{ flask_ns }} linkerd.io/inject=enabled --overwrite
       environment:
-        KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+        KUBECONFIG: "{{ kubeconfig_path | default(default_kubeconfig_path) }}"
       register: flask_annotate
       changed_when: "('annotated' in flask_annotate.stdout or 'overwritten' in flask_annotate.stdout) or flask_annotate.rc == 0"
       tags: [linkerd, inject, flask]
@@ -169,7 +190,7 @@
       command: |
         kubectl annotate namespace {{ postgres_ns }} linkerd.io/inject=enabled --overwrite
       environment:
-        KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+        KUBECONFIG: "{{ kubeconfig_path | default(default_kubeconfig_path) }}"
       register: postgres_annotate
       changed_when: "('annotated' in postgres_annotate.stdout or 'overwritten' in postgres_annotate.stdout) or postgres_annotate.rc == 0"
       tags: [linkerd, inject, postgres]
@@ -179,7 +200,7 @@
         kubectl rollout restart deployment -n {{ flask_ns }} --all || \
         kubectl rollout restart statefulset -n {{ flask_ns }} --all || true
       environment:
-        KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+        KUBECONFIG: "{{ kubeconfig_path | default(default_kubeconfig_path) }}"
       changed_when: false
       register: flask_restart
       tags: [linkerd, inject, flask, restart]
@@ -189,7 +210,7 @@
         kubectl rollout restart statefulset -n {{ postgres_ns }} --all || \
         kubectl rollout restart deployment -n {{ postgres_ns }} --all || true
       environment:
-        KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+        KUBECONFIG: "{{ kubeconfig_path | default(default_kubeconfig_path) }}"
       changed_when: false
       register: postgres_restart
       tags: [linkerd, inject, postgres, restart]
@@ -199,7 +220,7 @@
         kubectl rollout status deployment -n {{ flask_ns }} --timeout=300s 2>/dev/null || \
         kubectl rollout status statefulset -n {{ flask_ns }} --timeout=300s 2>/dev/null || true
       environment:
-        KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+        KUBECONFIG: "{{ kubeconfig_path | default(default_kubeconfig_path) }}"
       changed_when: false
       tags: [linkerd, inject, flask, wait]
 
@@ -208,7 +229,7 @@
         kubectl rollout status statefulset -n {{ postgres_ns }} --timeout=300s 2>/dev/null || \
         kubectl rollout status deployment -n {{ postgres_ns }} --timeout=300s 2>/dev/null || true
       environment:
-        KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+        KUBECONFIG: "{{ kubeconfig_path | default(default_kubeconfig_path) }}"
       changed_when: false
       tags: [linkerd, inject, postgres, wait]
 
@@ -220,7 +241,7 @@
       shell: |
         kubectl get pods -n {{ flask_ns }} -o jsonpath='{.items[*].spec.containers[*].name}' | grep -q linkerd-proxy && echo "Flask sidecars injected"
       environment:
-        KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+        KUBECONFIG: "{{ kubeconfig_path | default(default_kubeconfig_path) }}"
       register: flask_sidecar_check
       changed_when: false
       tags: [linkerd, verify, flask]
@@ -229,7 +250,7 @@
       shell: |
         kubectl get pods -n {{ postgres_ns }} -o jsonpath='{.items[*].spec.containers[*].name}' | grep -q linkerd-proxy && echo "PostgreSQL sidecars injected"
       environment:
-        KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+        KUBECONFIG: "{{ kubeconfig_path | default(default_kubeconfig_path) }}"
       register: postgres_sidecar_check
       changed_when: false
       tags: [linkerd, verify, postgres]
@@ -248,7 +269,7 @@
     - name: Show Linkerd namespace status
       command: kubectl get pods -n linkerd
       environment:
-        KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+        KUBECONFIG: "{{ kubeconfig_path | default(default_kubeconfig_path) }}"
       register: linkerd_pods
       changed_when: false
       tags: [linkerd, status]
@@ -262,7 +283,7 @@
       shell: /root/.linkerd2/bin/linkerd check 2>/dev/null | tail -3
       environment:
         PATH: "{{ ansible_env.PATH }}:/root/.linkerd2/bin"
-        KUBECONFIG: "{{ kubeconfig_path | default('/root/.kube/config') }}"
+        KUBECONFIG: "{{ kubeconfig_path | default(default_kubeconfig_path) }}"
       register: linkerd_final_check
       changed_when: false
       tags: [linkerd, status]

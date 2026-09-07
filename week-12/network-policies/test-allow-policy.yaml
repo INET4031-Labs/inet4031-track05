@@ -19,7 +19,7 @@ spec:
   # This policy applies to PostgreSQL pods
   podSelector:
     matchLabels:
-      app: postgres  # UPDATE: match your PostgreSQL pod labels
+      app: db  # Matches the baseline Postgres Deployment/Service label (app: db)
 
   # Define the policy types this applies to
   policyTypes:
@@ -59,7 +59,7 @@ spec:
 # spec:
 #   podSelector:
 #     matchLabels:
-#       app: postgres
+#       app: db
 #   policyTypes:
 #     - Ingress
 #   ingress:

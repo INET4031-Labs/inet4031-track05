@@ -65,44 +65,33 @@ Linkerd support should be confirmed for your k3d Kubernetes version before start
 ```
 track-05-network-and-cloud-infrastructure/
 ├── README.md (this file)
+├── docs/
+│   ├── qa-report-10.md
+│   ├── qa-report-11.md
+│   ├── qa-report-12.md
+│   ├── qa-report-13.md
+│   ├── qa-report-14.md
+│   ├── sprint-10-retrospective.md
+│   ├── sprint-11-retrospective.md
+│   ├── sprint-12-retrospective.md
+│   ├── sprint-13-retrospective.md
+│   └── sprint-14-retrospective.md
 ├── week-10/
-│   ├── docs/
-│   │   ├── sprint-5-retrospective.md
-│   │   ├── environment-log.md
-│   │   └── acceptance-criteria.md
 │   └── backlog.md
 ├── week-11/
-│   ├── docs/
-│   │   ├── sprint-6-retrospective.md
-│   │   ├── environment-log.md
-│   │   ├── acceptance-criteria.md
-│   │   └── qa-report-6.md
 │   └── ansible/
 │       ├── site.yml
 │       └── roles/
 │           └── linkerd/
 │               └── tasks/
 ├── week-12/
-│   ├── docs/
-│   │   ├── sprint-6-retrospective.md
-│   │   ├── environment-log.md
-│   │   ├── acceptance-criteria.md
-│   │   └── qa-report-6.md
 │   └── grafana/
 │       └── dashboards/
 ├── week-13/
-│   ├── docs/
-│   │   ├── sprint-7-retrospective.md
-│   │   ├── environment-log.md
-│   │   ├── acceptance-criteria.md
-│   │   └── qa-report-7.md
 │   └── ansible/
 ├── week-14/
-│   ├── docs/
-│   │   ├── sprint-7-retrospective.md
-│   │   ├── environment-log.md
-│   │   ├── acceptance-criteria.md
-│   │   └── qa-report-7.md
 │   └── verification/
 └── .gitignore
 ```
+
+Per-week QA reports and sprint retrospectives now live centrally under the top-level `docs/` directory (e.g. `docs/qa-report-11.md`, `docs/sprint-11-retrospective.md`) rather than in a `week-N/docs/` folder.

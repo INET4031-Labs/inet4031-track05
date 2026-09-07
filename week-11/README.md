@@ -1,414 +1,170 @@
 ---
 **Week 1-9 Prerequisite**
 
-Weeks 10-14 assume your completed Weeks 1-9 repositories are available as peer directories in `Student Repositories/`. This track's Ansible roles reference your prior work:
-- `linkerd` role uses your k3d cluster from Week 5 (`../week-05/`)
-- `linkerd` role meshes your Flask application from Week 2 (`../week-02/`) and PostgreSQL from Week 4 (`../week-04/` or `../infrastructure/`)
-
-Your track repo does NOT copy these — it integrates with them. Ensure your Week 1-9 work is complete and accessible before Week 11.
+Weeks 10-14 assume your completed Weeks 1-9 repositories are available as peer directories in `Student Repositories/`. This track's Ansible playbook (`ansible/site.yml`) rebuilds the Weeks 1-4 baseline (baseline packages, `app-stack`, `k3d-setup`, `opentofu-setup`) and then layers the `linkerd` role on top, targeting the same `myapp` k3d cluster and `default` namespace your Week 1-9 work already established.
 
 ---
 
-# Week 11: Core Build - Linkerd Installation and Service Meshing
+## Week 11: Core Build — Linkerd Installation and Service Meshing
 
 **Sprint 6 | Asynchronous**
 
-## Overview
+### Overview
 
-Week 11 is the core implementation sprint for the Network and Cloud Infrastructure track. Your team will install Linkerd as the service mesh control plane, mesh the Flask and PostgreSQL services with automatic mTLS, and validate that traffic encryption and metrics are working.
+Week 11 is the core implementation sprint. Your team installs the Linkerd control plane on your `myapp` k3d cluster, meshes the Flask and PostgreSQL deployments (both in the `default` namespace) with automatic mTLS, and starts turning the manual steps into an idempotent Ansible role — `week-11/ansible/roles/linkerd/` — that Week 14's Demo Day rebuild will depend on. By the end of the week you should have a mesh that passes `linkerd check`, two services with visible sidecars, and a first working (if rough) version of the Ansible automation.
 
-By the end of Week 11, you will have:
+### Learning Objectives
 
-1. Linkerd control plane running on the k3d cluster
-2. Flask and PostgreSQL services injected with Linkerd data plane proxies
-3. Automatic mTLS established between meshed services
-4. Linkerd CLI verification showing healthy mesh
-5. Initial Ansible role for Linkerd installation
+- Install and verify a Linkerd control plane against a live k3d cluster
+- Mesh existing Kubernetes workloads via namespace-level auto-injection annotation, without modifying application code
+- Verify mTLS is actually happening (not just installed) by inspecting proxy logs and Linkerd's own metrics
+- Write an idempotent Ansible role that installs and verifies a non-trivial piece of infrastructure
+- Diagnose the Week 1-9-specific `KUBECONFIG` gotcha that trips up most Ansible-driven k3d workflows
 
-## Prerequisites
+### Prerequisites
 
-- Week 10 complete: Architecture decision and backlog finalized
-- k3d cluster running with incident platform (Flask and PostgreSQL from Weeks 1-9)
-- kubectl access to the cluster
-- Helm 3+ installed locally (for Helm deployment)
-- Sufficient cluster resources for Linkerd control plane (2-4 GB memory available)
+- Week 10 complete: architecture decision (`week-10/adr.md`) finalized, backlog reviewed
+- `myapp` k3d cluster running with the Week 1-9 incident platform healthy in the `default` namespace
+- `kubectl` access to the cluster
+- Helm 3+ installed locally, if your Week 10 decision was to install via Helm
+- ~2-4 GB of free cluster memory for the Linkerd control plane
 
-## Part 1: Install Linkerd Control Plane
+---
 
-### Step 1: Verify Cluster Compatibility
+### Part 1: Install the Linkerd CLI and Control Plane
+
+**Step 1.** Verify cluster compatibility before installing anything:
 
 ```bash
-# Check k3d cluster is running
 kubectl cluster-info
-
-# Verify cluster version
 kubectl version --short
 ```
 
-### Step 2: Install Linkerd CLI
-
-Download and install the Linkerd CLI from https://linkerd.io/2/getting-started/#step-1-install-the-cli
+**Step 2.** Install the Linkerd CLI (`https://linkerd.io/2/getting-started/#step-1-install-the-cli`) and confirm it's on your `PATH`:
 
 ```bash
-# Example for Linux/macOS
 curl -sL https://run.linkerd.io/install | sh
-
-# Add to PATH
 export PATH=$PATH:~/.linkerd2/bin
 linkerd version
 ```
 
-### Step 3: Pre-Installation Checks
+**Step 3.** Run `linkerd check --pre` and resolve anything it flags before moving on — RBAC permission issues or CRD conflicts here will resurface later as confusing pod-level failures if you skip past them.
+
+**Step 4.** Deploy the control plane using **the installation approach your team decided on in Week 10** — Helm, or the CLI's own `linkerd install | kubectl apply -f -` path. Both work; use whichever your ADR committed to, since Part 6 of this week automates that same choice.
+
+**Step 5.** Verify: `kubectl get pods -n linkerd` should show all control-plane pods Running, and `linkerd check` (no `--pre`) should pass. Don't move to Part 2 until this is green — a shaky control plane makes every downstream mesh failure ambiguous.
+
+> **Enterprise Pattern:** Production platform teams treat `<tool> check` (or the equivalent health-check command) as a hard gate before rollout, not a nice-to-have. Skipping straight to meshing workloads on top of an unverified control plane is how a Tuesday afternoon becomes a Wednesday morning.
+
+---
+
+### Part 2: Mesh the Flask Application
+
+**Step 1.** Annotate the `default` namespace for Linkerd auto-injection:
 
 ```bash
-# Run Linkerd pre-install checks
-linkerd check --pre
-
-# Output should show green checkmarks for all pre-installation checks
-```
-
-### Step 4: Install Linkerd using Helm
-
-```bash
-# Add Linkerd Helm repository
-helm repo add linkerd https://helm.linkerd.io
-helm repo update
-
-# Create linkerd namespace
-kubectl create namespace linkerd
-
-# Install Linkerd control plane
-helm install linkerd2 linkerd/linkerd2 \
-  --namespace linkerd \
-  --set installNamespace=false \
-  --wait
-
-# Wait for installation to complete (~2 minutes)
-kubectl rollout status deployment/linkerd-controller -n linkerd
-```
-
-### Step 5: Verify Linkerd Installation
-
-```bash
-# Check Linkerd pods
-kubectl get pods -n linkerd
-
-# Run Linkerd post-install checks
-linkerd check
-
-# Expected output: All checks pass (green checkmarks)
-```
-
-Expected output:
-```
-> version
-  stable-2.14.x
-> proxy-init
-  ✓ ready on node-0
-> install-config
-  ✓ install config is valid
-...
-```
-
-### Step 6: Access Linkerd Dashboard (Optional)
-
-```bash
-# Start port-forward to Linkerd web UI
-linkerd viz install | kubectl apply -f -
-kubectl -n linkerd-viz port-forward svc/web 8084:8084
-
-# Open browser: http://localhost:8084
-```
-
-## Part 2: Mesh the Flask Application
-
-### Step 1: Annotate Flask Namespace
-
-```bash
-# Identify the namespace where Flask is running (e.g., default or app)
-kubectl get pods --all-namespaces | grep flask
-
-# Annotate the namespace for Linkerd auto-injection
-# Example: if Flask is in 'default' namespace
 kubectl annotate namespace default linkerd.io/inject=enabled --overwrite
 ```
 
-### Step 2: Restart Flask Pod
+**Step 2.** Restart the Flask pod(s) to trigger sidecar injection, and confirm each pod now runs two containers (`flask` + `linkerd-proxy`):
 
 ```bash
-# Delete the Flask pod to trigger re-creation with Linkerd sidecar
-kubectl delete pod -l app=flask
-
-# Verify new pod has two containers (Flask + linkerd-proxy)
-kubectl get pod -l app=flask -o jsonpath='{.items[0].spec.containers[*].name}'
-
-# Expected output: flask linkerd-proxy
+kubectl rollout restart deployment flask -n default
+kubectl get pod -l app=flask -n default -o jsonpath='{.items[0].spec.containers[*].name}'
 ```
 
-### Step 3: Verify Linkerd Sidecar Injection
+**Step 3.** Check the `linkerd-proxy` container's logs for a clean startup with no connection errors back to the control plane.
+
+---
+
+### Part 3: Mesh the PostgreSQL Service
+
+Same pattern as Part 2, applied to your PostgreSQL deployment (label `app: db` — the actual label used by this track's manifests, not `app: postgres`). Since Flask and PostgreSQL share the `default` namespace, the namespace annotation from Part 2 already covers PostgreSQL — you only need to trigger the restart and verify the sidecar:
 
 ```bash
-# Check sidecar logs
-kubectl logs -l app=flask -c linkerd-proxy
-
-# Should show proxy startup messages without errors
+kubectl rollout restart deployment db -n default
+kubectl get pod -l app=db -n default -o jsonpath='{.items[0].spec.containers[*].name}'
 ```
 
-## Part 3: Mesh the PostgreSQL Service
+---
 
-### Step 1: Identify PostgreSQL Service
+### Part 4: Verify End-to-End mTLS and Metrics
 
-```bash
-# Find PostgreSQL service
-kubectl get svc | grep postgres
-
-# Example: statustracker-postgres
-```
-
-### Step 2: Annotate PostgreSQL Namespace
+**Step 1.** Confirm both services show up as meshed, and pull a first look at live traffic stats:
 
 ```bash
-# If PostgreSQL is in a different namespace, annotate it
-kubectl annotate namespace <postgres-namespace> linkerd.io/inject=enabled --overwrite
-```
-
-### Step 3: Restart PostgreSQL Pod
-
-```bash
-# Delete PostgreSQL pod to trigger re-creation with sidecar
-kubectl delete pod -l app=postgres
-
-# Verify sidecar injection
-kubectl get pod -l app=postgres -o jsonpath='{.items[0].spec.containers[*].name}'
-
-# Expected output: postgres linkerd-proxy
-```
-
-## Part 4: Verify End-to-End mTLS
-
-### Step 1: Check Mesh Status
-
-```bash
-# View all meshed services
-kubectl get all -A | grep linkerd
-
-# Check service mesh pods
-linkerd viz stat pods
-
-# Expected output: Shows all meshed pods with mTLS status
-```
-
-### Step 2: Verify mTLS Certificate
-
-```bash
-# Check Linkerd certificates
-linkerd identity
-
-# Verify pod certificates
-kubectl exec -it <flask-pod> -c linkerd-proxy -- \
-  curl -s localhost:4191/metrics | grep tls_cert
-
-# Expected output: tls_cert metrics showing certificate status
-```
-
-### Step 3: Test Traffic Between Services
-
-```bash
-# From Flask pod, test connection to PostgreSQL
-kubectl exec -it <flask-pod> -- psql \
-  -h <postgres-service> \
-  -U appuser \
-  -d statustracker \
-  -c "SELECT COUNT(*) FROM incidents;"
-
-# Connection should succeed with mTLS encryption
-```
-
-## Part 5: Verify Traffic Metrics
-
-```bash
-# Check live traffic between services
+linkerd viz install | kubectl apply -f -   # if you haven't already
+linkerd viz stat pods -n default
 linkerd viz top
-
-# View deployment stats (replicas, success rates)
-linkerd viz stat deploy
-
-# Expected output: Shows Flask and PostgreSQL with 0% error rates
 ```
 
-## Part 6: Implement Ansible Role for Linkerd
+**Step 2.** Confirm mTLS is actually active — not just that sidecars are present. Check `linkerd identity`, and grep proxy logs for TLS handshake evidence between the Flask and PostgreSQL sidecars.
 
-### Step 1: Create Role Tasks
+**Step 3.** Run a real incident-data query from Flask through the meshed connection and confirm it still succeeds. If your Week 1-9 platform has a `/api/incidents` endpoint or equivalent, exercise it now — a mesh that blocks your own application traffic is a demo-day disaster waiting to happen.
 
-Create `ansible/roles/linkerd/tasks/main.yml`:
+**Step 4.** Capture the `linkerd check` output and a `linkerd viz stat` snapshot in `docs/sprint-11-retrospective.md` under **Notes** — this becomes your baseline for comparing against the Week 14 post-rebuild state.
 
-```yaml
 ---
-- name: Install Linkerd CLI
-  shell: |
-    curl -sL https://run.linkerd.io/install | sh
-  creates: "{{ ansible_env.HOME }}/.linkerd2/bin/linkerd"
 
-- name: Create linkerd namespace
-  kubernetes.core.k8s:
-    name: linkerd
-    api_version: v1
-    kind: Namespace
-    state: present
+### Part 5: Build the Linkerd Ansible Role
 
-- name: Add Linkerd Helm repository
-  kubernetes.core.helm_repository:
-    name: linkerd
-    repo_url: https://helm.linkerd.io
+This is the deliverable that carries you through to Demo Day: everything you just did by hand in Parts 1-3 needs to also happen via `ansible-playbook -i inventory ansible/site.yml`, idempotently.
 
-- name: Deploy Linkerd control plane
-  kubernetes.core.helm:
-    name: linkerd2
-    chart_ref: linkerd/linkerd2
-    release_namespace: linkerd
-    values:
-      installNamespace: false
-    state: present
-    wait: yes
+**Step 1.** The role skeleton already exists at `week-11/ansible/roles/linkerd/tasks/main.yml`, wired into `ansible/site.yml` as the last play, with `flask_namespace` and `postgres_namespace` both defaulting to `default` (matching your Week 1-9 baseline — there's no reason to override these unless your team deliberately split namespaces). Read through it before making changes; it already implements CLI install, pre-checks, control-plane deploy, namespace annotation, pod restart, and verification as separate tagged blocks (`linkerd`, `install`, `deploy`, `inject`, `verify`, `status`).
 
-- name: Enable auto-injection for Flask namespace
-  kubernetes.core.k8s:
-    state: present
-    definition:
-      apiVersion: v1
-      kind: Namespace
-      metadata:
-        name: default
-        annotations:
-          linkerd.io/inject: enabled
+**Step 2.** Pay close attention to how the role resolves `KUBECONFIG`. Because this play runs with `become: yes`, a naive default of `/root/.kube/config` will fail — k3d writes its kubeconfig to the *invoking, non-root* user's `$HOME/.kube/config`, not root's. The role resolves this the same way the Week 1-9 baseline check scripts do: `REAL_USER=${SUDO_USER:-$USER}`, then `getent passwd "$REAL_USER" | cut -d: -f6` for that user's real home directory, and defaults `KUBECONFIG` to `<that home>/.kube/config` rather than assuming root's path. If you add new tasks that talk to the cluster, reuse the `default_kubeconfig_path` fact this role already computes — don't reintroduce a hardcoded `/root/.kube/config`.
 
-- name: Restart Flask pods for sidecar injection
-  kubernetes.core.k8s:
-    state: absent
-    api_version: v1
-    kind: Pod
-    namespace: default
-    label_selectors:
-      - app=flask
-```
-
-### Step 2: Create Ansible Handler
-
-Create `ansible/roles/linkerd/handlers/main.yml`:
-
-```yaml
----
-- name: Wait for Linkerd pods
-  kubernetes.core.k8s_info:
-    kind: Pod
-    namespace: linkerd
-    label_selectors:
-      - control-plane
-    wait: yes
-    wait_condition:
-      type: Ready
-      status: "True"
-```
-
-## Part 7: Test Ansible Role
+**Step 3.** Validate syntax and dry-run before applying:
 
 ```bash
-# Validate syntax
 ansible-playbook -i ansible/inventory ansible/site.yml --syntax-check
-
-# Dry-run
 ansible-playbook -i ansible/inventory ansible/site.yml --check
-
-# Apply
-ansible-playbook -i ansible/inventory ansible/site.yml
-
-# Verify
-linkerd check
 ```
 
-## Part 8: Document in Environment Log
+**Step 4.** Run it for real, then run it again — the second run should show `changed=0` for tasks that are already satisfied. Fix any task that isn't idempotent now; it's much cheaper to fix in Week 11 than to discover during the Week 13 dry-run.
 
-Update `docs/environment-log.md` with:
+---
 
-1. Linkerd version and installation date
-2. Cluster version and node count
-3. Namespaces configured for auto-injection
-4. Services meshed and their status
-5. Metrics collection status
-6. Any errors or blockers encountered
+### Validation Checks
 
-Template entry:
+**QA runs all validation checks.** Confirm each of the following against a live cluster, not from memory.
 
-```markdown
-### Week 11: Linkerd Installation and Service Meshing
+#### Validation Check: Control Plane Healthy
 
-**Linkerd Control Plane:**
-- Version: [output of linkerd version]
-- Namespace: linkerd
-- Status: Running
-- Installation date: [date]
+`linkerd check` returns all checks passed — no manual interpretation needed, the tool's own exit code and output say pass or fail.
 
-**Meshed Services:**
-- Flask (namespace: default, status: ✓ injected)
-- PostgreSQL (namespace: default, status: ✓ injected)
+#### Validation Check: Both Services Meshed
 
-**mTLS Status:**
-- Certificates: Issued by Linkerd CA
-- Verification: linkerd identity output attached
+`kubectl get pods -n default -o jsonpath='{.items[*].spec.containers[*].name}'` includes `linkerd-proxy` for both the Flask and PostgreSQL pods.
 
-**Metrics Collection:**
-- Prometheus: [status]
-- Grafana: [status - configured or pending]
+#### Validation Check: Traffic Actually Flows Through the Mesh
 
-**Known Issues:**
-[Document any issues encountered]
-```
+A real incident-data query from Flask to PostgreSQL succeeds, and `linkerd viz stat pods -n default` shows non-zero request counts with a healthy success rate — not just "pods are running."
 
-## Part 9: Commit and Verify
+#### Validation Check: Ansible Role Is Idempotent
 
-```bash
-git add week-11/ ansible/ docs/
-git commit -m "Week 11: Linkerd installation, service meshing, Ansible role"
-git push origin main
-```
+Two consecutive runs of `ansible-playbook -i ansible/inventory ansible/site.yml` — the second run reports `changed=0` for the Linkerd role's steady-state tasks.
 
-## Verification Checklist
+---
 
-- [ ] Linkerd control plane pods running in linkerd namespace
-- [ ] `linkerd check` passes all checks
-- [ ] Flask pod has linkerd-proxy sidecar injected
-- [ ] PostgreSQL pod has linkerd-proxy sidecar injected
-- [ ] Traffic between Flask and PostgreSQL flows without errors
-- [ ] mTLS certificates issued and valid
-- [ ] Linkerd tap/metrics show live traffic
-- [ ] Ansible role creates Linkerd without errors
-- [ ] All files committed to git
+### Deliverables
 
-## Troubleshooting
+- [ ] Linkerd control plane installed and passing `linkerd check`
+- [ ] Flask deployment meshed (`linkerd-proxy` sidecar present, healthy startup logs)
+- [ ] PostgreSQL deployment meshed (`linkerd-proxy` sidecar present, healthy startup logs)
+- [ ] mTLS verified via `linkerd identity` and proxy logs, not just assumed
+- [ ] End-to-end incident-data query succeeds through the meshed connection
+- [ ] `week-11/ansible/roles/linkerd/tasks/main.yml` installs and verifies the mesh, using the resolved (non-root) `KUBECONFIG` path
+- [ ] `docs/sprint-11-retrospective.md` (Notes section) completed with Linkerd version, meshed services, and baseline metrics
 
-### "Failed to connect to cluster"
-- Verify kubectl is configured: `kubectl cluster-info`
-- Check k3d cluster is running: `k3d cluster list`
+---
 
-### "Insufficient resources for control plane"
-- Check cluster memory: `kubectl describe node`
-- Scale down other workloads or increase cluster size
+### Sprint Backlog: Preparing for Week 12
 
-### "Sidecar injection not working"
-- Verify namespace annotation: `kubectl get ns -o jsonpath='{.items[*].metadata.annotations.linkerd\.io/inject}'`
-- Restart pod: `kubectl delete pod <pod-name>`
+- **Story 3.1** — Add a Grafana datasource pointed at Linkerd's Prometheus metrics (your existing `kube-prometheus-stack` Grafana, NodePort `30080` — not a new Grafana instance)
+- **Story 3.2** — Build a latency dashboard (P50/P95/P99) for Flask-to-PostgreSQL
+- **Story 3.3** — Build a success-rate dashboard with error breakdown
+- **Story 4.1** — Document how your existing Week 7 NetworkPolicy rules interact with meshed traffic
+- **Story 4.2** — Draft a test NetworkPolicy that demonstrates blocking a meshed path on demand
 
-### "Certificate verification failed"
-- Check Linkerd CA: `kubectl get secret -n linkerd issuer-tls`
-- Review sidecar logs: `kubectl logs <pod> -c linkerd-proxy`
-
-## Next Steps
-
-Week 12 continues with:
-
-1. Installing Grafana and creating dashboards for latency and success rates
-2. Implementing NetworkPolicy on meshed services
-3. Demonstrating traffic blocking and allow policies
-4. Verifying end-to-end demo readiness
-
-Refer to `../week-12/README.md` for detailed instructions.
+---

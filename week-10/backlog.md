@@ -348,7 +348,7 @@ Deploy Linkerd as a service mesh on the k3d cluster to provide automatic mTLS, r
 ### Assumptions
 - Linkerd version compatible with k3d Kubernetes version
 - Linkerd Prometheus metrics are available for Grafana integration
-- Flask and PostgreSQL are running in separate namespaces
+- Flask and PostgreSQL both run in the single `default` namespace (matching the Week 1-9 baseline and this track's own Ansible defaults)
 - Existing Grafana instance available or will be deployed
 
 ### Risks

@@ -38,8 +38,8 @@ Use this checklist before, during, and after the demo to ensure all systems are 
 
 ### Grafana Dashboards
 
-- [ ] Grafana accessible: http://localhost:3000
-- [ ] Grafana login successful (admin/admin or your password)
+- [ ] Grafana accessible: http://localhost:30080 (NodePort; or `kubectl port-forward svc/kube-prometheus-stack-grafana 3000:80` for http://localhost:3000)
+- [ ] Grafana login successful (admin / changethis)
 - [ ] Linkerd Prometheus datasource working: Data Sources -> Linkerd -> Test Data Source
 - [ ] Latency dashboard loads: Dashboard -> Linkerd Service-to-Service Latency
 - [ ] Latency dashboard displays data (may take 1-2 minutes):
@@ -107,7 +107,7 @@ Fallback: If test fails, explain mTLS verification and show proxy logs
 
 ### Grafana Latency Dashboard
 
-1. Navigate to Grafana: http://localhost:3000
+1. Navigate to Grafana: http://localhost:30080 (or your port-forwarded http://localhost:3000)
 2. Click: Dashboards -> Linkerd Service-to-Service Latency
 3. Show: P50, P95, P99 latency graphs
 4. Explain: Latencies show communication overhead with mTLS enabled
@@ -203,15 +203,10 @@ k3d cluster list
 
 Command:
 ```bash
-k3d cluster create <cluster-name> \
-  --servers 1 \
-  --agents 2 \
-  --volume /path/to/data:/mnt/data@all \
-  --port 80:80@loadbalancer \
-  --port 443:443@loadbalancer
+k3d cluster create myapp --agents 2 --port "8081:80@loadbalancer" --k3s-arg "--disable=traefik@server:0"
 ```
 
-(Adjust options based on your initial cluster configuration)
+This must match the exact command used by the Week 11 `k3d-setup` Ansible role (`week-11/ansible/roles/k3d-setup/tasks/main.yml`) — the Ansible playbook rebuild in the next step depends on the cluster being named `myapp` with traefik disabled, so don't substitute your own options here.
 
 Expected:
 - Cluster created and appears in `k3d cluster list`
@@ -283,7 +278,7 @@ Expected: "Success"
 
 ```bash
 # Open Grafana and check dashboards
-# http://localhost:3000
+# http://localhost:30080 (or your port-forwarded http://localhost:3000)
 
 # Wait 2-3 minutes for metrics to populate
 # Latency and success rate dashboards should display data
